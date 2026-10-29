@@ -93,10 +93,14 @@ class AccessVerifier:
         signed in" — every visitor quietly gets the public version. Call it once at startup
         and log (or alert on) the error.
         """
+        # Every failure becomes RuntimeError, not just PyJWTError: a certs URL answering 200
+        # with HTML escapes PyJWT as a bare JSONDecodeError, and callers catch one type.
         try:
             keys = self._keys.get_signing_keys(refresh=True)
-        except jwt.PyJWTError as exc:
-            raise RuntimeError(f"cannot load Cloudflare Access signing keys: {exc}") from exc
+        except Exception as exc:  # re-raised as the one documented startup error type
+            raise RuntimeError(
+                f"cannot load Cloudflare Access signing keys: {type(exc).__name__}: {exc}"
+            ) from exc
         if not keys:
             raise RuntimeError("Cloudflare Access returned no usable signing keys")
 
