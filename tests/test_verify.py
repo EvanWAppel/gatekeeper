@@ -252,3 +252,45 @@ def test_check_raises_when_key_set_has_no_usable_keys(monkeypatch):
     v = AccessVerifier(team_domain=TEAM, audience=AUD)
     with pytest.raises(RuntimeError):
         v.check()
+
+
+# --- check() wraps every failure (homestar#41 review, MEDIUM; _system EA-8) ---------
+
+
+def _serve_body(monkeypatch, body: bytes):
+    """Drive PyJWT's real fetch path, but answer the certs request with ``body`` (200)."""
+    import io
+
+    import jwt.jwks_client as jc
+
+    class Opener:
+        def open(self, request, timeout=None):
+            return io.BytesIO(body)
+
+    monkeypatch.setattr(jc.urllib.request, "build_opener", lambda *handlers: Opener())
+
+
+def test_check_wraps_a_non_json_200_as_runtime_error(monkeypatch):
+    _serve_body(monkeypatch, b"<html>Cloudflare login page</html>")
+    v = AccessVerifier(team_domain=TEAM, audience=AUD)
+    with pytest.raises(RuntimeError, match="signing keys"):
+        v.check()
+
+
+def test_check_wraps_any_unexpected_error_as_runtime_error(monkeypatch):
+    import jwt as pyjwt
+
+    def explode(self):
+        raise KeyError("surprise")
+
+    monkeypatch.setattr(pyjwt.PyJWKClient, "fetch_data", explode)
+    v = AccessVerifier(team_domain=TEAM, audience=AUD)
+    with pytest.raises(RuntimeError, match="signing keys") as info:
+        v.check()
+    assert isinstance(info.value.__cause__, KeyError)  # original kept for debugging
+
+
+def test_verify_with_a_non_json_200_is_none(monkeypatch, make_token):
+    _serve_body(monkeypatch, b"<html>not keys</html>")
+    v = AccessVerifier(team_domain=TEAM, audience=AUD)
+    assert v.verify(make_token()) is None
